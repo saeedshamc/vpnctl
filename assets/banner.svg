@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#070b1f"/><stop offset="1" stop-color="#1b1148"/></linearGradient>
+    <linearGradient id="ac" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient>
+  </defs>
+  <rect width="1200" height="300" rx="28" fill="url(#bg)"/>
+  <g transform="translate(60,40) scale(0.46)">
+    <path d="M256 20 L394 72 V190 C394 270 334 330 256 356 C178 330 118 270 118 190 V72 Z" fill="#0b1030" stroke="url(#ac)" stroke-width="18" stroke-linejoin="round"/>
+    <path d="M184 142 L256 264 L328 142" fill="none" stroke="url(#ac)" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="184" cy="142" r="21" fill="#22d3ee"/><circle cx="328" cy="142" r="21" fill="#8b5cf6"/>
+  </g>
+  <text x="330" y="150" font-family="DejaVu Sans Mono, Menlo, Consolas, monospace" font-size="92" font-weight="700" fill="url(#ac)">vpnctl</text>
+  <text x="334" y="205" font-family="DejaVu Sans, Arial, sans-serif" font-size="30" fill="#c7d2fe">Your phone's VPN, on your Linux PC, over USB.</text>
+  <text x="334" y="248" font-family="DejaVu Sans, Arial, sans-serif" font-size="22" fill="#818cf8">System-wide  ·  Offline installer  ·  Tray + CLI + local web UI</text>
+</svg>

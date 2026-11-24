@@ -1,0 +1,12 @@
+# ~/.config/vpnctl/config.toml  (defaults shown)
+phone_port    = 10808      # proxy port on the phone (v2rayNG SOCKS)
+local_port    = 10808      # forwarded port on this computer
+proxy_type    = "socks5"   # socks5 | http
+dns           = ["1.1.1.1", "8.8.8.8"]
+dns_over_tls  = true       # DNS travels over TCP/TLS (UDP is unreliable via SOCKS)
+disable_ipv6  = true       # prevent IPv6 leaks while connected
+test_url      = "https://github.com"
+log_level     = "info"
+launch_at_login   = true   # tray starts with the desktop session
+auto_connect      = false  # connect when the phone is detected
+helper_at_boot    = true   # privileged helper as a systemd service (no password prompts)

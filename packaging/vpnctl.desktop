@@ -1,0 +1,20 @@
+[Desktop Entry]
+Type=Application
+Name=vpnctl
+GenericName=USB VPN Bridge
+Comment=Share your phone VPN with this computer over USB
+Exec=/usr/bin/vpnctl-gui
+Icon=vpnctl
+Terminal=false
+Categories=Network;Utility;
+Keywords=vpn;proxy;usb;tether;adb;v2ray;tunnel;socks;
+StartupNotify=false
+Actions=Connect;Disconnect;
+
+[Desktop Action Connect]
+Name=Connect
+Exec=/usr/bin/vpnctl up
+
+[Desktop Action Disconnect]
+Name=Disconnect
+Exec=/usr/bin/vpnctl down
