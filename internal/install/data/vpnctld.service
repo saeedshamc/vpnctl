@@ -1,0 +1,15 @@
+[Unit]
+Description=vpnctl privileged network helper
+Documentation=https://github.com/saeedshamc/vpnctl
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/vpnctl/vpnctld --service
+ExecStopPost=/usr/lib/vpnctl/vpnctld --cleanup
+Restart=on-failure
+RuntimeDirectory=vpnctl
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

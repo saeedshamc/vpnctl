@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=vpnctl (tray)
+Exec=/usr/bin/vpnctl-gui --tray-only
+Icon=vpnctl
+Terminal=false
+X-GNOME-Autostart-enabled=true
+Hidden=false
