@@ -1,0 +1,32 @@
+# Build outputs
+/bin/
+/dist/
+*.exe
+*.test
+
+# Root-level binaries (not cmd/<name>/ source trees)
+/vpnctl
+/vpnctld
+/vpnctl-gui
+/vpnctl-installer
+
+# Bundled third-party binaries (fetched by scripts)
+/bundle/adb
+/bundle/adb.exe
+/bundle/tun2socks
+/bundle/tun2socks.exe
+/bundle/*.tar*
+/bundle/*.zip
+!/bundle/.gitkeep
+!/bundle/checksums.txt
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local runtime / config leftovers
+/run/
+*.log

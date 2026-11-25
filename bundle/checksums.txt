@@ -1,0 +1,5 @@
+# Pinned bundled binaries (filled in Phase 6 by scripts/fetch-bundle.sh).
+# Format:  <sha256>  <filename>
+#
+# tun2socks  <version-tbd>
+# adb        <version-tbd>
