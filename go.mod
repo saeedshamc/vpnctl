@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	github.com/BurntSushi/toml v1.5.0
+	github.com/godbus/dbus/v5 v5.2.4
 	golang.org/x/net v0.63.0
 	golang.org/x/sys v0.50.0
 )
