@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>vpnctl</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="top">
+      <div class="brand">
+        <img src="/static/logo.svg" alt="" width="36" height="36" />
+        <span>vpnctl</span>
+      </div>
+      <nav>
+        <button data-view="dash" class="nav active">Dashboard</button>
+        <button data-view="settings" class="nav">Settings</button>
+        <button data-view="logs" class="nav">Logs</button>
+      </nav>
+    </header>
+
+    <main>
+      <section id="view-dash" class="view">
+        <p class="state" id="state-label">disconnected</p>
+        <button id="btn-toggle" class="cta">Connect</button>
+        <div class="meta">
+          <div><span>Exit</span><strong id="exit-ip">—</strong></div>
+          <div><span>Uptime</span><strong id="uptime">—</strong></div>
+          <div><span>Phone</span><strong id="phone">—</strong></div>
+        </div>
+        <p class="err" id="err-line" hidden></p>
+      </section>
+
+      <section id="view-settings" class="view hidden">
+        <form id="settings-form" class="form">
+          <label>Phone port <input name="phone_port" type="number" min="1" max="65535" /></label>
+          <label>Local port <input name="local_port" type="number" min="1" max="65535" /></label>
+          <label>Proxy
+            <select name="proxy_type">
+              <option value="socks5">socks5</option>
+              <option value="http">http</option>
+            </select>
+          </label>
+          <label>DNS <input name="dns" type="text" placeholder="1.1.1.1, 8.8.8.8" /></label>
+          <label class="check"><input name="dns_over_tls" type="checkbox" /> DNS over TLS</label>
+          <label class="check"><input name="disable_ipv6" type="checkbox" /> Disable IPv6</label>
+          <label class="check"><input name="launch_at_login" type="checkbox" /> Launch at login</label>
+          <label class="check"><input name="helper_at_boot" type="checkbox" /> Helper at boot</label>
+          <label class="check"><input name="auto_connect" type="checkbox" /> Auto-connect</label>
+          <button type="submit" class="cta small">Save</button>
+        </form>
+      </section>
+
+      <section id="view-logs" class="view hidden">
+        <pre id="log-box" class="logs"></pre>
+      </section>
+
+      <section id="view-wizard" class="view hidden">
+        <div class="wizard">
+          <h1>Welcome to vpnctl</h1>
+          <p>Share your Android VPN with this Linux PC over USB.</p>
+          <ol>
+            <li>Enable USB debugging on the phone</li>
+            <li>Start v2rayNG (or similar) SOCKS on port 10808</li>
+            <li>Plug the USB cable and tap Allow</li>
+          </ol>
+          <label class="check"><input id="wiz-login" type="checkbox" checked /> Start at login</label>
+          <label class="check"><input id="wiz-boot" type="checkbox" checked /> Helper at boot</label>
+          <label class="check"><input id="wiz-auto" type="checkbox" /> Auto-connect</label>
+          <button id="wiz-finish" class="cta">Finish</button>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
