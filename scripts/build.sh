@@ -14,11 +14,9 @@ export CGO_ENABLED=0
 export GOOS="${GOOS:-linux}"
 export GOARCH="${GOARCH:-amd64}"
 
-echo "building vpnctld → $OUT/vpnctld ($GOOS/$GOARCH)"
-go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/vpnctld" "$ROOT/cmd/vpnctld"
-
-# Later phases:
-# go build ... -o "$OUT/vpnctl" "$ROOT/cmd/vpnctl"
-# go build ... -o "$OUT/vpnctl-gui" "$ROOT/cmd/vpnctl-gui"
+for command in vpnctld vpnctl vpnctl-gui vpnctl-installer; do
+  echo "building $command → $OUT/$command ($GOOS/$GOARCH)"
+  go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/$command" "$ROOT/cmd/$command"
+done
 
 echo "ok"

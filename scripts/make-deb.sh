@@ -9,7 +9,7 @@ STAGE="$OUT/deb-root"
 PKG="vpnctl_${VER}_${ARCH}"
 
 export CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH"
-"$ROOT/scripts/build.sh"
+OUT="$ROOT/bin" "$ROOT/scripts/build.sh"
 
 if [[ ! -x "$ROOT/bundle/adb" || ! -x "$ROOT/bundle/tun2socks" ]]; then
   echo "missing bundle binaries; run scripts/fetch-bundle.sh first" >&2

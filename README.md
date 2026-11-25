@@ -7,7 +7,7 @@
 
 **Languages:** English · [فارسی](README.fa.md)
 
-**Status:** Phase 0 (design + assets). The code is delivered phase by phase, see [Phases](#12-phases).
+**Status:** Phases 1–5 are implemented but still need the acceptance testing listed below. Phase 6 (packaging) and Phase 7 (hardening and release) are in progress; a fresh-VM install, network-namespace tests, IPC fuzzing, and a tagged release remain outstanding.
 
 ---
 

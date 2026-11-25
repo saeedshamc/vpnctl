@@ -19,8 +19,4 @@ jobs:
           CGO_ENABLED: "0"
           GOOS: linux
           GOARCH: amd64
-        run: |
-          go build -o bin/vpnctld ./cmd/vpnctld
-          go build -o bin/vpnctl ./cmd/vpnctl
-          go build -o bin/vpnctl-gui ./cmd/vpnctl-gui
-          go build -o bin/vpnctl-installer ./cmd/vpnctl-installer
+        run: scripts/build.sh
