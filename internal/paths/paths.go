@@ -11,6 +11,7 @@ const (
 	RuntimeDir   = "/run/vpnctl"
 	SocketName   = "vpnctl.sock"
 	StateName    = "state.json"
+	LogName      = "vpnctld.log"
 	SystemConfig = "/etc/vpnctl/config.toml"
 	LibDir       = "/usr/lib/vpnctl"
 )
@@ -23,6 +24,11 @@ func SocketPath() string {
 // StatePath is the crash-recovery snapshot written by vpnctld.
 func StatePath() string {
 	return filepath.Join(RuntimeDir, StateName)
+}
+
+// LogPath is the helper log file tailed by `vpnctl logs`.
+func LogPath() string {
+	return filepath.Join(RuntimeDir, LogName)
 }
 
 // UserConfigDir returns ~/.config/vpnctl (or $XDG_CONFIG_HOME/vpnctl).

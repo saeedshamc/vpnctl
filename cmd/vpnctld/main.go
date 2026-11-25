@@ -3,19 +3,21 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"syscall"
 
 	"github.com/saeedshamc/vpnctl/internal/engine"
 	"github.com/saeedshamc/vpnctl/internal/ipc"
 	"github.com/saeedshamc/vpnctl/internal/paths"
+	"github.com/saeedshamc/vpnctl/internal/platform"
 	"github.com/saeedshamc/vpnctl/internal/version"
 )
 
@@ -40,7 +42,19 @@ func run() int {
 		return 0
 	}
 
-	log := newLogger(*logLevel)
+	if !platform.Supported() {
+		fmt.Fprintln(os.Stderr, platform.UnsupportedReason())
+		return 1
+	}
+
+	log, logFile, err := newLogger(*logLevel)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "logger:", err)
+		return 1
+	}
+	if logFile != nil {
+		defer logFile.Close()
+	}
 
 	if err := paths.EnsureRuntimeDir(); err != nil {
 		log.Error("runtime dir", "err", err)
@@ -58,7 +72,6 @@ func run() int {
 
 	if err := eng.RecoverIfNeeded(ctx); err != nil {
 		log.Error("recovery", "err", err)
-		// Continue anyway — better to keep serving so an explicit down can retry.
 	}
 
 	if *cleanup {
@@ -107,7 +120,7 @@ func makeHandler(eng *engine.Engine, log *slog.Logger) ipc.Handler {
 		case ipc.MethodStatus:
 			return ipc.OKResp(req.ID, eng.Status(ctx))
 		case ipc.MethodTest:
-			res, err := eng.Test(ctx, upParams(req))
+			res, err := eng.Test(ctx, ipc.UpParamsFromMap(req.Params))
 			if err != nil {
 				resp := ipc.ErrResp(req.ID, err.Code, err.Message)
 				resp.Result = res
@@ -115,7 +128,7 @@ func makeHandler(eng *engine.Engine, log *slog.Logger) ipc.Handler {
 			}
 			return ipc.OKResp(req.ID, res)
 		case ipc.MethodUp:
-			res, err := eng.Up(ctx, upParams(req))
+			res, err := eng.Up(ctx, ipc.UpParamsFromMap(req.Params))
 			if err != nil {
 				resp := ipc.ErrResp(req.ID, err.Code, err.Message)
 				resp.Result = res
@@ -141,44 +154,8 @@ func makeHandler(eng *engine.Engine, log *slog.Logger) ipc.Handler {
 	}
 }
 
-func upParams(req ipc.Request) ipc.UpParams {
-	var p ipc.UpParams
-	if req.Params == nil {
-		return p
-	}
-	if v, ok := asInt(req.Params["phone_port"]); ok {
-		p.PhonePort = v
-	}
-	if v, ok := asInt(req.Params["local_port"]); ok {
-		p.LocalPort = v
-	}
-	if v, ok := req.Params["proxy_type"].(string); ok {
-		p.ProxyType = v
-	}
-	return p
-}
-
-func asInt(v any) (int, bool) {
-	switch t := v.(type) {
-	case float64:
-		return int(t), true
-	case int:
-		return t, true
-	case int64:
-		return int(t), true
-	case json.Number:
-		n, err := t.Int64()
-		return int(n), err == nil
-	case string:
-		n, err := strconv.Atoi(t)
-		return n, err == nil
-	default:
-		return 0, false
-	}
-}
-
 func authLists() (uids, gids []uint32) {
-	uids = []uint32{0} // root
+	uids = []uint32{0}
 	if u, err := user.Current(); err == nil {
 		if id, err := strconv.ParseUint(u.Uid, 10, 32); err == nil {
 			uids = append(uids, uint32(id))
@@ -192,7 +169,7 @@ func authLists() (uids, gids []uint32) {
 	return uids, gids
 }
 
-func newLogger(level string) *slog.Logger {
+func newLogger(level string) (*slog.Logger, *os.File, error) {
 	var lv slog.Level
 	switch level {
 	case "debug":
@@ -204,6 +181,17 @@ func newLogger(level string) *slog.Logger {
 	default:
 		lv = slog.LevelInfo
 	}
-	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lv})
-	return slog.New(h)
+	opts := &slog.HandlerOptions{Level: lv}
+
+	writers := []io.Writer{os.Stderr}
+	var file *os.File
+	if err := os.MkdirAll(filepath.Dir(paths.LogPath()), 0o755); err == nil {
+		f, err := os.OpenFile(paths.LogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err == nil {
+			file = f
+			writers = append(writers, f)
+		}
+	}
+	h := slog.NewTextHandler(io.MultiWriter(writers...), opts)
+	return slog.New(h), file, nil
 }

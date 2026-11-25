@@ -293,6 +293,10 @@ func (e *Engine) startWatchdogLocked() {
 }
 
 func (e *Engine) mergeParams(p ipc.UpParams) config.Config {
+	// Reload from disk so `vpnctl config set` takes effect without restarting vpnctld.
+	if loaded, err := config.Load(); err == nil {
+		e.cfg = loaded
+	}
 	cfg := e.cfg
 	if p.PhonePort > 0 {
 		cfg.PhonePort = p.PhonePort
