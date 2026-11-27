@@ -26,6 +26,7 @@
   const uptime = document.getElementById("uptime");
   const phone = document.getElementById("phone");
   const errLine = document.getElementById("err-line");
+  const testResult = document.getElementById("test-result");
 
   function showErr(msg) {
     if (!msg) { errLine.hidden = true; errLine.textContent = ""; return; }
@@ -68,6 +69,21 @@
     }
   });
 
+  document.getElementById("btn-test").addEventListener("click", async (ev) => {
+    const button = ev.currentTarget;
+    button.disabled = true;
+    testResult.textContent = "Testing phone proxy…";
+    try {
+      const result = await api("/api/test", { method: "POST", body: "{}" });
+      testResult.textContent = `OK · ${result.latency_ms}ms · phone ${result.phone_state}`;
+      if (result.message) testResult.textContent += ` · ${result.message}`;
+    } catch (e) {
+      testResult.textContent = String(e.message || e);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
   document.querySelectorAll(".nav").forEach((b) => {
     b.addEventListener("click", () => {
       document.querySelectorAll(".nav").forEach((x) => x.classList.remove("active"));
@@ -76,6 +92,10 @@
       ["dash", "settings", "logs", "wizard"].forEach((v) => {
         document.getElementById(`view-${v}`)?.classList.toggle("hidden", v !== view && !(v === "dash" && view === "dash"));
       });
+      const initialView = location.hash.slice(1);
+      if (initialView === "settings" || initialView === "logs") {
+        document.querySelector(`.nav[data-view="${initialView}"]`)?.click();
+      }
       document.getElementById("view-dash").classList.toggle("hidden", view !== "dash");
       document.getElementById("view-settings").classList.toggle("hidden", view !== "settings");
       document.getElementById("view-logs").classList.toggle("hidden", view !== "logs");
@@ -85,17 +105,24 @@
   });
 
   async function loadSettings() {
-    const cfg = await api("/api/config");
-    const form = document.getElementById("settings-form");
-    form.phone_port.value = cfg.phone_port;
-    form.local_port.value = cfg.local_port;
-    form.proxy_type.value = cfg.proxy_type;
-    form.dns.value = (cfg.dns || []).join(", ");
-    form.dns_over_tls.checked = !!cfg.dns_over_tls;
-    form.disable_ipv6.checked = !!cfg.disable_ipv6;
-    form.launch_at_login.checked = !!cfg.launch_at_login;
-    form.helper_at_boot.checked = !!cfg.helper_at_boot;
-    form.auto_connect.checked = !!cfg.auto_connect;
+    try {
+      const cfg = await api("/api/config");
+      const form = document.getElementById("settings-form");
+      form.phone_port.value = cfg.phone_port;
+      form.local_port.value = cfg.local_port;
+      form.proxy_type.value = cfg.proxy_type;
+      form.dns.value = (cfg.dns || []).join(", ");
+      form.test_url.value = cfg.test_url;
+      form.log_level.value = cfg.log_level;
+      form.dns_over_tls.checked = !!cfg.dns_over_tls;
+      form.disable_ipv6.checked = !!cfg.disable_ipv6;
+      form.launch_at_login.checked = !!cfg.launch_at_login;
+      form.helper_at_boot.checked = !!cfg.helper_at_boot;
+      form.auto_connect.checked = !!cfg.auto_connect;
+      showErr("");
+    } catch (e) {
+      showErr(String(e.message || e));
+    }
   }
 
   document.getElementById("settings-form").addEventListener("submit", async (ev) => {
@@ -106,6 +133,8 @@
       local_port: Number(form.local_port.value),
       proxy_type: form.proxy_type.value,
       dns: form.dns.value.split(",").map((s) => s.trim()).filter(Boolean),
+      test_url: form.test_url.value,
+      log_level: form.log_level.value,
       dns_over_tls: form.dns_over_tls.checked,
       disable_ipv6: form.disable_ipv6.checked,
       launch_at_login: form.launch_at_login.checked,
@@ -138,7 +167,9 @@
         document.querySelectorAll(".view").forEach((v) => v.classList.add("hidden"));
         document.getElementById("view-wizard").classList.remove("hidden");
       }
-    } catch (_) {}
+    } catch (e) {
+      showErr(String(e.message || e));
+    }
   }
 
   document.getElementById("wiz-finish").addEventListener("click", async () => {
@@ -148,10 +179,14 @@
       auto_connect: document.getElementById("wiz-auto").checked,
       done: true,
     };
-    await api("/api/wizard", { method: "POST", body: JSON.stringify(body) });
-    document.getElementById("view-wizard").classList.add("hidden");
-    document.getElementById("view-dash").classList.remove("hidden");
-    await refresh();
+    try {
+      await api("/api/wizard", { method: "POST", body: JSON.stringify(body) });
+      document.getElementById("view-wizard").classList.add("hidden");
+      document.getElementById("view-dash").classList.remove("hidden");
+      await refresh();
+    } catch (e) {
+      showErr(String(e.message || e));
+    }
   });
 
   maybeWizard();

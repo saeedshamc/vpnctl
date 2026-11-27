@@ -3,6 +3,7 @@ package ipc
 import (
 	"bufio"
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -26,4 +27,27 @@ func TestErrResp(t *testing.T) {
 	if r.OK || r.Error == nil || r.Error.Code != CodeProxyDead {
 		t.Fatalf("%+v", r)
 	}
+}
+
+func TestReadRequestRejectsOversizedMessage(t *testing.T) {
+	input := strings.Repeat("x", MaxMessageBytes+1) + "\n"
+	if _, err := ReadRequest(bufio.NewReader(strings.NewReader(input))); err == nil {
+		t.Fatal("expected an oversized message to be rejected")
+	}
+}
+
+func FuzzReadRequest(f *testing.F) {
+	f.Add([]byte("{\"id\":\"1\",\"method\":\"ping\"}\n"))
+	f.Add([]byte("not json\n"))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_, _ = ReadRequest(bufio.NewReader(bytes.NewReader(data)))
+	})
+}
+
+func FuzzReadResponse(f *testing.F) {
+	f.Add([]byte("{\"id\":\"1\",\"ok\":true}\n"))
+	f.Add([]byte("not json\n"))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_, _ = ReadResponse(bufio.NewReader(bytes.NewReader(data)))
+	})
 }

@@ -4,6 +4,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -27,12 +28,13 @@ type Engine struct {
 	StatePath string
 	ADB       *adb.Client
 
-	mu      sync.Mutex
-	cfg     config.Config
-	st      state.File
-	tun     *tunnel.Handle
-	watch   *watchdog.Checker
-	started time.Time
+	mu         sync.Mutex
+	watchEpoch uint64
+	cfg        config.Config
+	st         state.File
+	tun        *tunnel.Handle
+	watch      *watchdog.Checker
+	started    time.Time
 }
 
 // New builds an engine with defaults loaded from disk.
@@ -106,7 +108,17 @@ func (e *Engine) statusLocked(ctx context.Context) ipc.StatusResult {
 
 // Test probes the phone proxy without changing routes.
 func (e *Engine) Test(ctx context.Context, p ipc.UpParams) (ipc.TestResult, *ipc.Error) {
-	cfg := e.mergeParams(p)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	cfg, err := e.mergeParams(p)
+	if err != nil {
+		return ipc.TestResult{}, &ipc.Error{Code: ipc.CodeBadRequest, Message: err.Error()}
+	}
+	activeForward := e.st.ConnState == state.StateConnected
+	if activeForward && (cfg.LocalPort != e.st.LocalPort || cfg.PhonePort != e.st.PhonePort || string(cfg.ProxyType) != e.st.ProxyType) {
+		return ipc.TestResult{}, &ipc.Error{Code: ipc.CodeBadRequest, Message: "disconnect before testing different proxy settings"}
+	}
 	if e.ADB == nil {
 		return ipc.TestResult{}, &ipc.Error{Code: ipc.CodePhoneADB, Message: "adb binary not found"}
 	}
@@ -118,10 +130,16 @@ func (e *Engine) Test(ctx context.Context, p ipc.UpParams) (ipc.TestResult, *ipc
 		msg := fmt.Sprintf("phone not ready (adb state=%s)", st)
 		return ipc.TestResult{PhoneState: string(st), Message: msg}, &ipc.Error{Code: ipc.CodePhoneADB, Message: msg}
 	}
-	if err := e.ADB.Forward(ctx, cfg.LocalPort, cfg.PhonePort); err != nil {
-		return ipc.TestResult{PhoneState: string(st)}, &ipc.Error{Code: ipc.CodePhoneADB, Message: err.Error()}
+	if !activeForward {
+		if err := e.ADB.Forward(ctx, cfg.LocalPort, cfg.PhonePort); err != nil {
+			return ipc.TestResult{PhoneState: string(st)}, &ipc.Error{Code: ipc.CodePhoneADB, Message: err.Error()}
+		}
 	}
 	pr := probe.ThroughProxy(ctx, cfg)
+	var removeErr error
+	if !activeForward {
+		removeErr = e.ADB.RemoveForward(ctx, cfg.LocalPort)
+	}
 	tr := ipc.TestResult{
 		OK:         pr.OK,
 		LatencyMS:  pr.Latency.Milliseconds(),
@@ -132,7 +150,13 @@ func (e *Engine) Test(ctx context.Context, p ipc.UpParams) (ipc.TestResult, *ipc
 		tr.Message = tr.Message + "; " + w
 	}
 	if !pr.OK {
+		if removeErr != nil {
+			return tr, &ipc.Error{Code: ipc.CodeNetworkFailed, Message: errors.Join(fmt.Errorf("proxy probe: %s", pr.Message), fmt.Errorf("remove adb forward: %w", removeErr)).Error()}
+		}
 		return tr, &ipc.Error{Code: ipc.CodeProxyDead, Message: pr.Message}
+	}
+	if removeErr != nil {
+		return tr, &ipc.Error{Code: ipc.CodeNetworkFailed, Message: "remove adb forward: " + removeErr.Error()}
 	}
 	return tr, nil
 }
@@ -147,15 +171,23 @@ func (e *Engine) Up(ctx context.Context, p ipc.UpParams) (ipc.StatusResult, *ipc
 	}
 	// Half-connected / error: clean first.
 	if e.st.NeedsRecovery() || e.st.ConnState == state.StateConnecting || e.tun != nil {
-		_ = e.teardownLocked(ctx, "cleanup before up")
+		if err := e.teardownLocked(ctx, "cleanup before up"); err != nil {
+			return e.statusLocked(ctx), &ipc.Error{Code: ipc.CodeNetworkFailed, Message: "previous connection could not be restored: " + err.Error()}
+		}
 	}
 
-	cfg := e.mergeParams(p)
+	cfg, err := e.mergeParams(p)
+	if err != nil {
+		return e.statusLocked(ctx), &ipc.Error{Code: ipc.CodeBadRequest, Message: err.Error()}
+	}
+	e.cfg = cfg
 	e.setStateLocked(state.StateConnecting, "")
 	e.st.LocalPort = cfg.LocalPort
 	e.st.PhonePort = cfg.PhonePort
 	e.st.ProxyType = string(cfg.ProxyType)
-	_ = state.Save(e.StatePath, e.st)
+	if err := state.Save(e.StatePath, e.st); err != nil {
+		return e.failLocked(ctx, ipc.CodeNetworkFailed, "save connection state: "+err.Error())
+	}
 
 	if e.ADB == nil {
 		return e.failLocked(ctx, ipc.CodePhoneADB, "adb binary not found")
@@ -173,37 +205,54 @@ func (e *Engine) Up(ctx context.Context, p ipc.UpParams) (ipc.StatusResult, *ipc
 		e.Log.Warn(w)
 	}
 	if !pr.OK {
-		_ = e.ADB.RemoveForward(ctx, cfg.LocalPort)
-		return e.failLocked(ctx, ipc.CodeProxyDead, pr.Message)
+		removeErr := e.ADB.RemoveForward(ctx, cfg.LocalPort)
+		return e.failLocked(ctx, ipc.CodeProxyDead, errors.Join(fmt.Errorf("%s", pr.Message), removeErr).Error())
 	}
 
-	snap, err := netcfg.Snapshot(ctx)
+	snap, err := netcfg.Snapshot(ctx, cfg)
 	if err != nil {
-		_ = e.ADB.RemoveForward(ctx, cfg.LocalPort)
-		return e.failLocked(ctx, ipc.CodeNetworkFailed, "snapshot: "+err.Error())
+		removeErr := e.ADB.RemoveForward(ctx, cfg.LocalPort)
+		return e.failLocked(ctx, ipc.CodeNetworkFailed, errors.Join(fmt.Errorf("snapshot: %w", err), removeErr).Error())
 	}
 	e.st.Snapshot = snap
-	_ = state.Save(e.StatePath, e.st)
+	e.st.TunName = tunnel.DefaultTunName
+	if err := state.Save(e.StatePath, e.st); err != nil {
+		removeErr := e.ADB.RemoveForward(ctx, cfg.LocalPort)
+		e.st.Snapshot = nil
+		e.st.TunName = ""
+		return e.failLocked(ctx, ipc.CodeNetworkFailed, errors.Join(fmt.Errorf("save recovery snapshot: %w", err), removeErr).Error())
+	}
 
 	h, err := tunnel.Start(ctx, tunnel.Options{Cfg: cfg})
 	if err != nil {
-		_ = netcfg.Restore(ctx, snap)
-		_ = e.ADB.RemoveForward(ctx, cfg.LocalPort)
-		e.st.Snapshot = nil
-		return e.failLocked(ctx, ipc.CodeNetworkFailed, "tunnel: "+err.Error())
+		rollbackErr := errors.Join(
+			netcfg.Restore(ctx, snap),
+			e.ADB.RemoveForward(ctx, cfg.LocalPort),
+		)
+		if rollbackErr == nil {
+			e.st = state.NewDisconnected()
+		}
+		return e.failLocked(ctx, ipc.CodeNetworkFailed, errors.Join(fmt.Errorf("tunnel: %w", err), rollbackErr).Error())
 	}
 	e.tun = h
 	e.st.TunName = h.Name
 	e.st.Tun2SocksPID = h.PID
-	_ = state.Save(e.StatePath, e.st)
+	if err := state.Save(e.StatePath, e.st); err != nil {
+		rollbackErr := errors.Join(netcfg.Restore(ctx, snap), h.Stop(ctx), e.ADB.RemoveForward(ctx, cfg.LocalPort))
+		e.tun = nil
+		if rollbackErr == nil {
+			e.st = state.NewDisconnected()
+		}
+		return e.failLocked(ctx, ipc.CodeNetworkFailed, errors.Join(fmt.Errorf("save tunnel state: %w", err), rollbackErr).Error())
+	}
 
 	if err := netcfg.ApplyTunnelRoutes(ctx, h.Name, cfg, snap); err != nil {
-		_ = h.Stop(ctx)
+		rollbackErr := errors.Join(netcfg.Restore(ctx, snap), h.Stop(ctx), e.ADB.RemoveForward(ctx, cfg.LocalPort))
 		e.tun = nil
-		_ = netcfg.Restore(ctx, snap)
-		_ = e.ADB.RemoveForward(ctx, cfg.LocalPort)
-		e.st.Snapshot = nil
-		return e.failLocked(ctx, ipc.CodeNetworkFailed, "routes: "+err.Error())
+		if rollbackErr == nil {
+			e.st = state.NewDisconnected()
+		}
+		return e.failLocked(ctx, ipc.CodeNetworkFailed, errors.Join(fmt.Errorf("routes: %w", err), rollbackErr).Error())
 	}
 
 	e.started = time.Now().UTC()
@@ -211,7 +260,12 @@ func (e *Engine) Up(ctx context.Context, p ipc.UpParams) (ipc.StatusResult, *ipc
 	e.st.ConnState = state.StateConnected
 	e.st.LastError = ""
 	e.st.ExitIP, e.st.ExitCountry = lookupExit(ctx)
-	_ = state.Save(e.StatePath, e.st)
+	if err := state.Save(e.StatePath, e.st); err != nil {
+		if rollbackErr := e.teardownLocked(ctx, "save connected state"); rollbackErr != nil {
+			err = errors.Join(err, rollbackErr)
+		}
+		return e.statusLocked(ctx), &ipc.Error{Code: ipc.CodeNetworkFailed, Message: "save connected state: " + err.Error()}
+	}
 
 	e.startWatchdogLocked()
 	e.Log.Info("connected", "exit_ip", e.st.ExitIP, "country", e.st.ExitCountry)
@@ -237,67 +291,99 @@ func (e *Engine) Cleanup(ctx context.Context) error {
 
 func (e *Engine) teardownLocked(ctx context.Context, reason string) error {
 	e.Log.Info("teardown", "reason", reason)
+	e.watchEpoch++
 	if e.watch != nil {
 		e.watch.Stop()
 		e.watch = nil
 	}
-	var first error
+	var errs []error
 	catch := func(err error) {
-		if err != nil && first == nil {
-			first = err
+		if err != nil {
+			errs = append(errs, err)
 		}
-	}
-
-	if e.tun != nil {
-		catch(e.tun.Stop(ctx))
-		e.tun = nil
-	} else if e.st.TunName != "" {
-		// Best-effort: Stop on a synthetic handle deletes the device.
-		h := &tunnel.Handle{Name: e.st.TunName}
-		catch(h.Stop(ctx))
 	}
 
 	if e.st.Snapshot != nil {
 		catch(netcfg.Restore(ctx, e.st.Snapshot))
 	}
+	if e.tun != nil {
+		catch(e.tun.Stop(ctx))
+		e.tun = nil
+	} else if e.st.TunName != "" {
+		var stopErr error
+		if e.st.Tun2SocksPID > 0 {
+			stopErr = tunnel.StopProcess(e.st.Tun2SocksPID, e.st.TunName)
+			catch(stopErr)
+		}
+		if stopErr == nil {
+			catch(tunnel.CleanupStaleDevice(ctx, e.st.TunName))
+		}
+	}
+
 	if e.ADB != nil && e.st.LocalPort > 0 {
 		catch(e.ADB.RemoveForward(ctx, e.st.LocalPort))
 	}
 
+	if err := errors.Join(errs...); err != nil {
+		e.st.ConnState = state.StateError
+		e.st.LastError = err.Error()
+		if saveErr := state.Save(e.StatePath, e.st); saveErr != nil {
+			err = errors.Join(err, fmt.Errorf("save recovery state: %w", saveErr))
+		}
+		return err
+	}
 	e.st = state.NewDisconnected()
-	catch(state.Save(e.StatePath, e.st))
-	return first
+	return state.Save(e.StatePath, e.st)
 }
 
 func (e *Engine) startWatchdogLocked() {
 	if e.watch != nil {
 		e.watch.Stop()
 	}
+	e.watchEpoch++
+	epoch := e.watchEpoch
 	e.watch = &watchdog.Checker{
 		Interval: 5 * time.Second,
 		ADB:      e.ADB,
-		Cfg:      func() config.Config { return e.cfg },
-		Tunnel:   func() *tunnel.Handle { return e.tun },
-		Log:      e.Log,
+		Cfg: func() config.Config {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			return e.cfg
+		},
+		Tunnel: func() *tunnel.Handle {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			return e.tun
+		},
+		Log: e.Log,
 		OnFail: func(f watchdog.Failure) {
 			e.Log.Error("watchdog triggered down", "reason", f.Reason)
 			e.mu.Lock()
 			defer e.mu.Unlock()
-			_ = e.teardownLocked(context.Background(), f.Reason)
+			if epoch != e.watchEpoch || e.st.ConnState != state.StateConnected {
+				return
+			}
+			if err := e.teardownLocked(context.Background(), f.Reason); err != nil {
+				f.Reason = errors.Join(fmt.Errorf("%s", f.Reason), fmt.Errorf("teardown: %w", err)).Error()
+			}
 			e.st.ConnState = state.StateError
 			e.st.LastError = f.Reason
-			_ = state.Save(e.StatePath, e.st)
+			if err := state.Save(e.StatePath, e.st); err != nil {
+				e.st.LastError = errors.Join(fmt.Errorf("%s", e.st.LastError), fmt.Errorf("save watchdog error state: %w", err)).Error()
+				e.Log.Error("save watchdog error state", "err", err)
+			}
 		},
 	}
 	e.watch.Start()
 }
 
-func (e *Engine) mergeParams(p ipc.UpParams) config.Config {
+func (e *Engine) mergeParams(p ipc.UpParams) (config.Config, error) {
 	// Reload from disk so `vpnctl config set` takes effect without restarting vpnctld.
-	if loaded, err := config.Load(); err == nil {
-		e.cfg = loaded
+	loaded, err := config.Load()
+	if err != nil {
+		return config.Config{}, fmt.Errorf("reload config: %w", err)
 	}
-	cfg := e.cfg
+	cfg := loaded
 	if p.PhonePort > 0 {
 		cfg.PhonePort = p.PhonePort
 	}
@@ -308,8 +394,10 @@ func (e *Engine) mergeParams(p ipc.UpParams) config.Config {
 		cfg.ProxyType = config.ProxyType(p.ProxyType)
 	}
 	cfg.Normalize()
-	e.cfg = cfg
-	return cfg
+	if err := cfg.Validate(); err != nil {
+		return config.Config{}, fmt.Errorf("invalid connection settings: %w", err)
+	}
+	return cfg, nil
 }
 
 func (e *Engine) setStateLocked(s state.ConnState, errMsg string) {
@@ -320,7 +408,10 @@ func (e *Engine) setStateLocked(s state.ConnState, errMsg string) {
 func (e *Engine) failLocked(ctx context.Context, code int, msg string) (ipc.StatusResult, *ipc.Error) {
 	e.Log.Error("up failed", "code", code, "err", msg)
 	e.setStateLocked(state.StateError, msg)
-	_ = state.Save(e.StatePath, e.st)
+	if err := state.Save(e.StatePath, e.st); err != nil {
+		msg = errors.Join(fmt.Errorf("%s", msg), fmt.Errorf("save error state: %w", err)).Error()
+		e.st.LastError = msg
+	}
 	return e.statusLocked(ctx), &ipc.Error{Code: code, Message: msg}
 }
 

@@ -139,7 +139,9 @@ func (c *Client) Forward(ctx context.Context, localPort, remotePort int) error {
 	if localPort < 1 || localPort > 65535 || remotePort < 1 || remotePort > 65535 {
 		return fmt.Errorf("invalid forward ports local=%d remote=%d", localPort, remotePort)
 	}
-	_, _ = c.Run(ctx, "forward", "--remove", fmt.Sprintf("tcp:%d", localPort))
+	if err := c.RemoveForward(ctx, localPort); err != nil {
+		return fmt.Errorf("remove existing adb forward: %w", err)
+	}
 	_, err := c.Run(ctx, "forward", fmt.Sprintf("tcp:%d", localPort), fmt.Sprintf("tcp:%d", remotePort))
 	return err
 }
@@ -150,10 +152,13 @@ func (c *Client) RemoveForward(ctx context.Context, localPort int) error {
 		return fmt.Errorf("invalid local port %d", localPort)
 	}
 	_, err := c.Run(ctx, "forward", "--remove", fmt.Sprintf("tcp:%d", localPort))
-	if err != nil && strings.Contains(err.Error(), "not found") {
-		return nil
+	if err != nil {
+		message := strings.ToLower(err.Error())
+		if strings.Contains(message, "listener") && strings.Contains(message, "not found") ||
+			strings.Contains(message, "no such file or directory") {
+			return nil
+		}
+		return err
 	}
-	// adb may also print to stderr differently; ignore soft failures on cleanup.
-	_ = err
 	return nil
 }

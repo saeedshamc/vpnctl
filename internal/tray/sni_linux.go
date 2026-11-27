@@ -72,10 +72,10 @@ func (it *Item) export() error {
 	it.props = props
 
 	table := map[string]interface{}{
-		"ContextMenu":        it.contextMenu,
-		"Activate":           it.activate,
-		"SecondaryActivate":  it.activate,
-		"Scroll":             func(delta int32, orientation string) {},
+		"ContextMenu":       it.contextMenu,
+		"Activate":          it.activate,
+		"SecondaryActivate": it.activate,
+		"Scroll":            func(delta int32, orientation string) {},
 	}
 	if err := it.conn.ExportMethodTable(table, sniPath, sniIFACE); err != nil {
 		return err
@@ -140,6 +140,13 @@ func (it *Item) SetState(s State, detail string) {
 	_ = it.conn.Emit(sniPath, sniIFACE+".NewIcon")
 	_ = it.conn.Emit(sniPath, sniIFACE+".NewToolTip")
 	it.emitMenuLayout()
+}
+
+// CurrentState reports the last state sent to the tray backend.
+func (it *Item) CurrentState() State {
+	it.mu.Lock()
+	defer it.mu.Unlock()
+	return it.state
 }
 
 // Notify sends a desktop notification (best-effort).

@@ -1,6 +1,8 @@
 package adb
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestParseDevicesLineLogic(t *testing.T) {
 	// Smoke: DeviceState constants used by PrimaryState switch.

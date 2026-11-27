@@ -23,6 +23,11 @@ func ServiceEnabled(ctx context.Context) (bool, error) {
 	_ = ctx
 	return false, ErrNotSupported
 }
+func Uninstall(ctx context.Context, purge bool) error {
+	_ = ctx
+	_ = purge
+	return ErrNotSupported
+}
 
 func AutostartEnable() error  { return ErrNotSupported }
 func AutostartDisable() error { return ErrNotSupported }

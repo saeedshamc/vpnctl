@@ -16,7 +16,7 @@ export GOARCH="${GOARCH:-amd64}"
 
 for command in vpnctld vpnctl vpnctl-gui vpnctl-installer; do
   echo "building $command → $OUT/$command ($GOOS/$GOARCH)"
-  go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/$command" "$ROOT/cmd/$command"
+  go build -buildvcs=false -trimpath -ldflags "$LDFLAGS" -o "$OUT/$command" "$ROOT/cmd/$command"
 done
 
 echo "ok"

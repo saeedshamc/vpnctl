@@ -33,28 +33,33 @@ type RouteSnapshot struct {
 
 // Snapshot is everything needed to roll the PC network back.
 type Snapshot struct {
-	DefaultRoutes []RouteSnapshot `json:"default_routes"`
-	DNSServers    []string        `json:"dns_servers,omitempty"`
-	DNSMode       string          `json:"dns_mode,omitempty"` // "resolved" | "resolvconf" | "none"
-	IPv6Disabled  bool            `json:"ipv6_disabled"`
-	IPv6WasOn     bool            `json:"ipv6_was_on"`
+	DefaultRoutes      []RouteSnapshot `json:"default_routes"`
+	DNSServers         []string        `json:"dns_servers,omitempty"`
+	DNSMode            string          `json:"dns_mode,omitempty"` // "resolved" | "resolvconf" | "none"
+	ResolvConfCaptured bool            `json:"resolv_conf_captured,omitempty"`
+	ResolvConfExisted  bool            `json:"resolv_conf_existed,omitempty"`
+	ResolvConfOriginal []byte          `json:"resolv_conf_original,omitempty"`
+	ResolvConfWritten  []byte          `json:"resolv_conf_written,omitempty"`
+	ResolvConfMode     uint32          `json:"resolv_conf_mode,omitempty"`
+	IPv6Disabled       bool            `json:"ipv6_disabled"`
+	IPv6WasOn          bool            `json:"ipv6_was_on"`
 }
 
 // File is the on-disk recovery document under /run/vpnctl/state.json.
 type File struct {
-	Version    int       `json:"version"`
-	UpdatedAt  time.Time `json:"updated_at"`
-	ConnState  ConnState `json:"conn_state"`
-	StartedAt  time.Time `json:"started_at,omitempty"`
-	LocalPort  int       `json:"local_port,omitempty"`
-	PhonePort  int       `json:"phone_port,omitempty"`
-	ProxyType  string    `json:"proxy_type,omitempty"`
-	TunName    string    `json:"tun_name,omitempty"`
-	Tun2SocksPID int     `json:"tun2socks_pid,omitempty"`
-	ExitIP     string    `json:"exit_ip,omitempty"`
-	ExitCountry string   `json:"exit_country,omitempty"`
-	LastError  string    `json:"last_error,omitempty"`
-	Snapshot   *Snapshot `json:"snapshot,omitempty"`
+	Version      int       `json:"version"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	ConnState    ConnState `json:"conn_state"`
+	StartedAt    time.Time `json:"started_at,omitempty"`
+	LocalPort    int       `json:"local_port,omitempty"`
+	PhonePort    int       `json:"phone_port,omitempty"`
+	ProxyType    string    `json:"proxy_type,omitempty"`
+	TunName      string    `json:"tun_name,omitempty"`
+	Tun2SocksPID int       `json:"tun2socks_pid,omitempty"`
+	ExitIP       string    `json:"exit_ip,omitempty"`
+	ExitCountry  string    `json:"exit_country,omitempty"`
+	LastError    string    `json:"last_error,omitempty"`
+	Snapshot     *Snapshot `json:"snapshot,omitempty"`
 }
 
 const currentVersion = 1
@@ -122,12 +127,9 @@ func Clear(path string) error {
 
 // NeedsRecovery reports whether a leftover snapshot must be rolled back.
 func (f File) NeedsRecovery() bool {
-	if f.Snapshot == nil {
-		return false
-	}
 	switch f.ConnState {
 	case StateConnecting, StateConnected, StateError:
-		return true
+		return f.Snapshot != nil || f.TunName != "" || f.Tun2SocksPID != 0 || f.LocalPort > 0
 	default:
 		return false
 	}

@@ -7,6 +7,8 @@ import (
 	"io"
 )
 
+const MaxMessageBytes = 1 << 20
+
 // WriteJSON writes one JSON object followed by a newline.
 func WriteJSON(w io.Writer, v any) error {
 	data, err := json.Marshal(v)
@@ -20,7 +22,7 @@ func WriteJSON(w io.Writer, v any) error {
 
 // ReadRequest reads one newline-delimited Request.
 func ReadRequest(r *bufio.Reader) (Request, error) {
-	line, err := r.ReadBytes('\n')
+	line, err := readLine(r)
 	if err != nil {
 		return Request{}, err
 	}
@@ -33,7 +35,7 @@ func ReadRequest(r *bufio.Reader) (Request, error) {
 
 // ReadResponse reads one newline-delimited Response.
 func ReadResponse(r *bufio.Reader) (Response, error) {
-	line, err := r.ReadBytes('\n')
+	line, err := readLine(r)
 	if err != nil {
 		return Response{}, err
 	}
@@ -42,6 +44,23 @@ func ReadResponse(r *bufio.Reader) (Response, error) {
 		return Response{}, fmt.Errorf("bad response json: %w", err)
 	}
 	return resp, nil
+}
+
+func readLine(r *bufio.Reader) ([]byte, error) {
+	var line []byte
+	for {
+		part, err := r.ReadSlice('\n')
+		if len(line)+len(part) > MaxMessageBytes {
+			return nil, fmt.Errorf("IPC message exceeds %d bytes", MaxMessageBytes)
+		}
+		line = append(line, part...)
+		if err == nil {
+			return line, nil
+		}
+		if err != bufio.ErrBufferFull {
+			return nil, err
+		}
+	}
 }
 
 // OKResp builds a successful response.

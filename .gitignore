@@ -17,6 +17,8 @@
 /bundle/tun2socks.exe
 /bundle/*.tar*
 /bundle/*.zip
+/bundle/adb-NOTICE.txt
+/bundle/versions.txt
 !/bundle/.gitkeep
 !/bundle/checksums.txt
 

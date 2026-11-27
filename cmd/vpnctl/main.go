@@ -15,6 +15,7 @@ import (
 
 	"github.com/saeedshamc/vpnctl/internal/config"
 	"github.com/saeedshamc/vpnctl/internal/daemonize"
+	"github.com/saeedshamc/vpnctl/internal/install"
 	"github.com/saeedshamc/vpnctl/internal/ipc"
 	"github.com/saeedshamc/vpnctl/internal/paths"
 	"github.com/saeedshamc/vpnctl/internal/platform"
@@ -56,6 +57,10 @@ func run(args []string) int {
 	case "up":
 		return cmdUp(ctx, rest)
 	case "down":
+		if len(rest) != 0 {
+			fmt.Fprintln(os.Stderr, "usage: vpnctl down")
+			return ipc.CodeBadRequest
+		}
 		return cmdDown(ctx)
 	case "status":
 		return cmdStatus(ctx, rest)
@@ -68,8 +73,7 @@ func run(args []string) int {
 	case "autostart":
 		return cmdAutostart(rest)
 	case "uninstall":
-		fmt.Fprintln(os.Stderr, "uninstall is available after packaging (phase 6)")
-		return 1
+		return cmdUninstall(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
 		printUsage(os.Stderr)
@@ -154,6 +158,9 @@ func cmdStatus(ctx context.Context, args []string) int {
 	for _, a := range args {
 		if a == "--json" {
 			asJSON = true
+		} else {
+			fmt.Fprintf(os.Stderr, "unknown status option: %s\n", a)
+			return ipc.CodeBadRequest
 		}
 	}
 	resp, code := call(ctx, ipc.MethodStatus, nil)
@@ -227,6 +234,9 @@ func cmdLogs(args []string) int {
 	for _, a := range args {
 		if a == "-f" || a == "--follow" {
 			follow = true
+		} else {
+			fmt.Fprintf(os.Stderr, "unknown logs option: %s\n", a)
+			return ipc.CodeBadRequest
 		}
 	}
 	path := paths.LogPath()
@@ -262,8 +272,20 @@ func cmdService(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: vpnctl service enable|disable")
 		return ipc.CodeBadRequest
 	}
-	fmt.Fprintf(os.Stderr, "service %s will be wired in phase 3 (systemd unit already drafted in packaging/)\n", args[0])
-	return 1
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	var err error
+	if args[0] == "enable" {
+		err = install.ServiceEnable(ctx)
+	} else {
+		err = install.ServiceDisable(ctx)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "service %s: %v\n", args[0], err)
+		return ipc.CodePermission
+	}
+	fmt.Printf("service %s\n", args[0])
+	return 0
 }
 
 func cmdAutostart(args []string) int {
@@ -271,8 +293,36 @@ func cmdAutostart(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: vpnctl autostart enable|disable")
 		return ipc.CodeBadRequest
 	}
-	fmt.Fprintf(os.Stderr, "autostart %s will be wired in phase 3 (desktop entry drafted in packaging/)\n", args[0])
-	return 1
+	var err error
+	if args[0] == "enable" {
+		err = install.AutostartEnable()
+	} else {
+		err = install.AutostartDisable()
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "autostart %s: %v\n", args[0], err)
+		return 1
+	}
+	fmt.Printf("autostart %s\n", args[0])
+	return 0
+}
+
+func cmdUninstall(args []string) int {
+	purge := false
+	if len(args) == 1 && args[0] == "--purge" {
+		purge = true
+	} else if len(args) != 0 {
+		fmt.Fprintln(os.Stderr, "usage: 		vpnctl uninstall [--purge]")
+		return ipc.CodeBadRequest
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if err := install.Uninstall(ctx, purge); err != nil {
+		fmt.Fprintf(os.Stderr, "uninstall: %v\n", err)
+		return 1
+	}
+	fmt.Println("uninstall complete")
+	return 0
 }
 
 func parseUpFlags(args []string) (map[string]any, error) {

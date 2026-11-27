@@ -14,9 +14,15 @@ jobs:
           go-version-file: go.mod
       - name: Test
         run: go test ./...
+      - name: Fuzz IPC decoders
+        run: |
+          go test ./internal/ipc -run=^$ -fuzz=FuzzReadRequest -fuzztime=10s
+          go test ./internal/ipc -run=^$ -fuzz=FuzzReadResponse -fuzztime=10s
+      - name: Network namespace route tests
+        run: sudo --preserve-env=PATH bash scripts/test-netns.sh
       - name: Build linux amd64
         env:
           CGO_ENABLED: "0"
           GOOS: linux
           GOARCH: amd64
-        run: scripts/build.sh
+        run: bash scripts/build.sh

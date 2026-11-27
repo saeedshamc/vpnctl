@@ -14,3 +14,11 @@ func destroyDevice(ctx context.Context, name string) error {
 	_, _ = ctx, name
 	return nil
 }
+
+func StopProcess(int, string) error {
+	return ErrNotSupported
+}
+
+func CleanupStaleDevice(context.Context, string) error {
+	return ErrNotSupported
+}

@@ -72,6 +72,7 @@ func run() int {
 
 	if err := eng.RecoverIfNeeded(ctx); err != nil {
 		log.Error("recovery", "err", err)
+		return 1
 	}
 
 	if *cleanup {

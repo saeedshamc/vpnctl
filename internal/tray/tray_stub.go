@@ -12,5 +12,6 @@ func Start(cbs Callbacks) (*Item, error) {
 }
 
 func (it *Item) SetState(s State, detail string) {}
-func (it *Item) Notify(summary, body string)    {}
-func (it *Item) Close() error                   { return nil }
+func (it *Item) CurrentState() State             { return StateOff }
+func (it *Item) Notify(summary, body string)     {}
+func (it *Item) Close() error                    { return nil }

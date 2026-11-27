@@ -13,8 +13,13 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	f.ConnState = StateConnected
 	f.LocalPort = 10808
 	f.Snapshot = &Snapshot{
-		DefaultRoutes: []RouteSnapshot{{Dst: "default", Gateway: "1.2.3.4", Dev: "wlan0", Family: "inet"}},
-		IPv6WasOn:     true,
+		DefaultRoutes:      []RouteSnapshot{{Dst: "default", Gateway: "1.2.3.4", Dev: "wlan0", Family: "inet"}},
+		IPv6WasOn:          true,
+		ResolvConfCaptured: true,
+		ResolvConfExisted:  true,
+		ResolvConfOriginal: []byte("search test\n"),
+		ResolvConfWritten:  []byte("nameserver 1.1.1.1\n"),
+		ResolvConfMode:     0o640,
 	}
 	if err := Save(path, f); err != nil {
 		t.Fatal(err)
@@ -28,6 +33,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if !got.NeedsRecovery() {
 		t.Fatal("expected NeedsRecovery")
+	}
+	if string(got.Snapshot.ResolvConfOriginal) != "search test\n" || got.Snapshot.ResolvConfMode != 0o640 {
+		t.Fatalf("DNS snapshot did not survive round-trip: %+v", got.Snapshot)
 	}
 }
 

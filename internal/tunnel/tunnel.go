@@ -3,7 +3,9 @@ package tunnel
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -24,10 +26,11 @@ type Handle struct {
 	Name string
 	PID  int
 
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	done   <-chan error
-	bin    string
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	done    <-chan error
+	bin     string
+	process *os.Process
 }
 
 // Options control how the tunnel is started.
@@ -77,12 +80,42 @@ func (h *Handle) Stop(ctx context.Context) error {
 	if cancel != nil {
 		cancel()
 	}
-	timer := time.NewTimer(5 * time.Second)
-	defer timer.Stop()
-	select {
-	case <-h.done:
-	case <-timer.C:
-	case <-ctx.Done():
+	var stopErr error
+	if h.done != nil {
+		timer := time.NewTimer(5 * time.Second)
+		killAndWait := false
+		select {
+		case <-h.done:
+		case <-timer.C:
+			stopErr = h.killProcess()
+			killAndWait = true
+		case <-ctx.Done():
+			stopErr = ctx.Err()
+			if killErr := h.killProcess(); killErr != nil {
+				stopErr = errors.Join(stopErr, killErr)
+			}
+			killAndWait = true
+		}
+		timer.Stop()
+		if killAndWait && h.process != nil {
+			select {
+			case <-h.done:
+			case <-time.After(2 * time.Second):
+				stopErr = errors.Join(stopErr, fmt.Errorf("tun2socks process %d did not exit", h.PID))
+			}
+		}
 	}
-	return destroyDevice(ctx, h.Name)
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelCleanup()
+	return errors.Join(stopErr, destroyDevice(cleanupCtx, h.Name))
+}
+
+func (h *Handle) killProcess() error {
+	if h.process == nil {
+		return nil
+	}
+	if err := h.process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return err
+	}
+	return nil
 }

@@ -24,6 +24,8 @@
       <section id="view-dash" class="view">
         <p class="state" id="state-label">disconnected</p>
         <button id="btn-toggle" class="cta">Connect</button>
+        <button id="btn-test" class="cta small">Test phone proxy</button>
+        <p id="test-result" role="status"></p>
         <div class="meta">
           <div><span>Exit</span><strong id="exit-ip">—</strong></div>
           <div><span>Uptime</span><strong id="uptime">—</strong></div>
@@ -43,6 +45,15 @@
             </select>
           </label>
           <label>DNS <input name="dns" type="text" placeholder="1.1.1.1, 8.8.8.8" /></label>
+          <label>Test URL <input name="test_url" type="url" /></label>
+          <label>Log level
+            <select name="log_level">
+              <option value="debug">debug</option>
+              <option value="info">info</option>
+              <option value="warn">warn</option>
+              <option value="error">error</option>
+            </select>
+          </label>
           <label class="check"><input name="dns_over_tls" type="checkbox" /> DNS over TLS</label>
           <label class="check"><input name="disable_ipv6" type="checkbox" /> Disable IPv6</label>
           <label class="check"><input name="launch_at_login" type="checkbox" /> Launch at login</label>

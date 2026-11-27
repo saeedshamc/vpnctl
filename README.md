@@ -7,7 +7,7 @@
 
 **Languages:** English · [فارسی](README.fa.md)
 
-**Status:** Phases 1–5 are implemented but still need the acceptance testing listed below. Phase 6 (packaging) and Phase 7 (hardening and release) are in progress; a fresh-VM install, network-namespace tests, IPC fuzzing, and a tagged release remain outstanding.
+**Status:** Phases 0–5 are implemented. Phase 6 has reproducible bundle/package builders and uninstall hooks; validation on a clean Debian VM and a phone remains outstanding. Phase 7 now runs network-namespace route tests, IPC fuzzing, Go tests and Linux builds in CI; a tagged release and release signing still require a maintainer's release credentials and final licensing review.
 
 ---
 
@@ -74,10 +74,10 @@
 | R2 | GUI without graphical frameworks (no Qt/GTK/Electron/Wails/Tauri) | The UI is plain HTML + CSS + vanilla JS **embedded in the Go binary** and served by Go's standard `net/http` on `127.0.0.1`. The tray icon speaks the D-Bus *StatusNotifierItem* protocol directly in Go. No toolkit is linked. |
 | R3 | Behaves like PdaNet on Windows: background app, tray icon, right-click menu with **Connect**, click opens the window | `vpnctl-gui --tray-only` runs silently; the right-click menu has Connect / Disconnect / Open / Settings / Quit; left-click or *Open* shows the UI window. Closing the window only hides it. |
 | R4 | Port is user-configurable; default 10808 | `phone_port` and `local_port` in config, `--phone-port/--local-port` in CLI, fields in Settings. |
-| R5 | Installer with a graphical page; **also for .deb**, which is the main target | A `.deb` cannot draw its own window, so the graphical wizard is the **first-run wizard** of `vpnctl-gui` (launched automatically after install). A standalone `vpnctl-installer` (one self-contained file) shows the same wizard for non-deb systems. See §9. |
-| R6 | No dependencies; works fully offline | Static Go binaries (`CGO_ENABLED=0`). `tun2socks` and `adb` are **bundled inside** the package. The `.deb` declares an empty `Depends:` line. The only things assumed are those every desktop Linux already has (kernel `tun`, systemd, polkit, a web browser for the UI). Details in §9.4. |
+| R5 | Installer with a graphical page; **also for .deb**, which is the main target | A `.deb` cannot draw its own window, so the wizard appears on the first launch of `vpnctl-gui`. The portable archive includes a `vpnctl-installer` entrypoint and the companion binaries. See §9. |
+| R6 | No runtime package dependencies; works fully offline | Static Go binaries (`CGO_ENABLED=0`). `tun2socks` and `adb` are bundled in release artifacts. The `.deb` declares an empty `Depends:` line. Host requirements include `iproute2`, TUN support, systemd, polkit, and a browser. Details in §9.4. |
 | R7 | Ask for the **root password** when connecting, like v2rayN on Linux | The privileged helper `vpnctld` is started through `pkexec` (polkit): the system's standard password dialog appears. The PC never stores the password and no passwordless `sudoers` rule is created. |
-| R8 | Optionally start with the system; one of the **first options during install**, and togglable later in Settings | Wizard step 2 asks for it (default: on). Settings has the same switches. They enable/disable a systemd unit and an XDG autostart entry. |
+| R8 | Optionally start with the system; togglable later in Settings | The first-run wizard asks for it. Settings has the same switches. They enable/disable a systemd unit and an XDG autostart entry. |
 | R9 | Icon in the application list, openable by search | `vpnctl.desktop` + icons installed to `hicolor` (16–512 px + SVG). Keywords: vpn, proxy, usb, tether, adb, v2ray. |
 | R10 | A cool logo, stored in the repo assets folder | `assets/` (the folder is spelled `assets`): `logo.svg`, `icon.svg`, `banner.svg`, PNG sizes, 4 tray state icons. |
 
@@ -100,7 +100,7 @@ vpnctl-installer ─────┘                                             
 | `vpnctld` | **root** | The only privileged component. Does adb, tun, routes, DNS, IPv6, watchdog. Listens on a unix socket. |
 | `vpnctl` | user | CLI. Sends commands to `vpnctld`; starts it through `pkexec` when it is not running. |
 | `vpnctl-gui` | user | Tray icon + a tiny HTTP server on `127.0.0.1` that serves the embedded web UI. Opens the window in the user's browser in *app mode* (no tabs/address bar) when possible. |
-| `vpnctl-installer` | user (asks for root) | Self-contained installer with the graphical wizard, for systems without the `.deb` flow. |
+| `vpnctl-installer` | user (uses pkexec for file installation) | Installer entrypoint in the portable archive; launches the first-run UI after copying the companion files. |
 
 Only `vpnctld` has root. A bug in the UI or CLI cannot touch the network configuration directly.
 
@@ -186,12 +186,12 @@ Exit codes: `0` ok · `2` phone/adb problem · `3` proxy dead · `4` network set
 * Icon states: grey = disconnected, amber = connecting, green = connected, red = error (`assets/tray/`).
 * Right-click: **Connect / Disconnect · Open · Settings · Quit**.
 * Left-click: open the window. Closing the window hides it; the app stays in the tray.
-* Only one instance; starting it again just opens the window.
+* Only one instance; a second launch exits without starting another tray process.
 
 ### Window (local web UI)
 
-* **Dashboard:** big connect button, state, exit IP + country, uptime, live traffic.
-* **Settings:** ports, proxy type, DNS, IPv6, *Launch at login*, *Helper at boot*, *Auto-connect*.
+* **Dashboard:** connect/disconnect, phone proxy test, state, exit IP + country and uptime.
+* **Settings:** ports, proxy type, DNS, DNS-over-TLS, IPv6, test URL, log level, *Launch at login*, *Helper at boot*, *Auto-connect*.
 * **Logs:** live log view.
 * **First-run wizard:** see §9.3.
 * Vanilla HTML/CSS/JS only (no framework, no CDN, works offline). Dark theme matching the logo.
@@ -206,16 +206,18 @@ Security of the UI server: binds to `127.0.0.1` only, random port, per-session t
 
 | File | Purpose |
 |---|---|
-| `vpnctl_<ver>_amd64.deb` | **Main target.** Fully offline. |
-| `vpnctl-installer-<ver>-amd64` | One self-contained file with the graphical wizard, for non-Debian systems. |
-| `vpnctl-<ver>-amd64.tar.gz` | Portable archive. |
-| `SHA256SUMS` (+ signature) | Integrity. |
+| `vpnctl_<ver>_amd64.deb` | **Main target.** Offline after the pinned binaries have been fetched. |
+| `vpnctl_<ver>_linux_amd64.tar.gz` | Portable archive containing the installer, app binaries and fetched tools. |
+| `SHA256SUMS` | SHA-256 checksums for generated release archives. Signing is not configured. |
+
+The current bundle and Debian package targets are Linux/amd64 only. `vpnctl-installer` is an entrypoint inside the portable archive; it is not a self-extracting single-file installer.
 
 ### 9.2 What the .deb contains
 
 ```
 /usr/bin/vpnctl                 /usr/bin/vpnctl-gui
 /usr/lib/vpnctl/vpnctld         /usr/lib/vpnctl/tun2socks     /usr/lib/vpnctl/adb
+/usr/share/doc/vpnctl/           license and Android platform-tools notice
 /usr/share/applications/vpnctl.desktop
 /usr/share/icons/hicolor/{16..512}x../apps/vpnctl.png   + scalable/apps/vpnctl.svg
 /usr/share/polkit-1/actions/org.vpnctl.daemon.policy
@@ -223,29 +225,28 @@ Security of the UI server: binds to `127.0.0.1` only, random port, per-session t
 /etc/vpnctl/config.toml
 ```
 
-`postinst` installs files and refreshes icon/desktop caches; it never needs the network. `prerm/postrm` stop the service, roll back network state and, on `purge`, remove config.
+The package installs these files without downloading anything. `prerm/postrm` stop the service, attempt network rollback and reload systemd; `purge` removes the system configuration conffile.
 
 ### 9.3 Graphical install wizard
 
-A `.deb` has no GUI of its own, so the wizard is the first launch of `vpnctl-gui` (the desktop entry opens it automatically after install; the standalone installer opens the same pages first).
+A `.deb` has no GUI of its own, so the wizard appears the first time the user opens `vpnctl-gui` from the desktop menu. The portable archive contains the same GUI and an installer entrypoint.
 
-1. **Welcome** (logo, what will be installed).
-2. **Startup options (first choices):** ☑ Start vpnctl at login · ☑ Run the helper at boot (no password prompts) · ☐ Auto-connect when the phone is plugged in.
-3. **Ports and defaults:** phone port / local port (default 10808).
-4. **Phone check:** detects the phone, guides USB-debugging authorisation.
-5. **Finish:** the password dialog (polkit) applies system-level choices; then a **Connect** button.
+1. **Welcome** (logo and connection instructions).
+2. **Startup options:** start at login, run the helper at boot, and auto-connect when the phone is available.
+3. Configure ports and proxy settings later in Settings (defaults: 10808).
+4. Test the phone proxy from the dashboard; Android's USB-debugging authorization must be approved on the phone.
 
-Every choice can be changed later in Settings; the wizard can be re-run with `vpnctl gui --wizard`.
+Every choice can be changed later in Settings; the wizard can be re-run with `vpnctl-gui --wizard`.
 
 ### 9.4 Dependency policy (honest version)
 
 * **Bundled:** `tun2socks`, `adb`, all icons, all web assets. Go binaries are static.
-* **Not bundled, assumed present on any desktop Linux:** the kernel `tun` module, systemd (units), polkit (`pkexec` password dialog), systemd-resolved for DNS (with a fallback), and a web browser for the window.
+* **Not bundled, required from the host:** `iproute2`, kernel TUN support, systemd, polkit (`pkexec` password dialog), systemd-resolved for DNS-over-TLS, and a browser for the window. Without systemd-resolved, DNS-over-TLS is unavailable; a guarded resolv.conf fallback works without TLS.
 * The `.deb` therefore has an empty `Depends:`; a missing optional piece produces a clear message instead of a failed install.
 
 ### 9.5 Uninstall
 
-`vpnctl uninstall` / `apt purge vpnctl` removes binaries, service, polkit policy, desktop and autostart entries, icons and config, and rolls back any active tunnel. (Lesson from the PdaNet installer: nothing is left behind, and no `sudoers` file is ever created.)
+`vpnctl uninstall` removes an installed Debian package; `vpnctl uninstall --purge` also purges its system conffile. Both use `dpkg` and the normal polkit privilege prompt, and the package's `prerm` attempts to roll back a live tunnel. A portable installation is not removed by this command, and per-user settings/autostart files are intentionally preserved. No `sudoers` file is created.
 
 ## 10. Security model
 
@@ -254,7 +255,7 @@ Every choice can be changed later in Settings; the wizard can be re-run with `vp
 * The unix socket is authenticated by peer credentials (`SO_PEERCRED`): only the installing user (and group `vpnctl`) may command the helper.
 * The helper executes only its own bundled binaries with absolute paths and fixed arguments; ports and DNS values are validated (no shell, no string concatenation).
 * The UI server is localhost-only with token + `Origin` check.
-* Releases ship with checksums and a signature.
+* Build scripts generate SHA-256 checksums. Release signing has not been configured.
 * Privacy note: a *free* VPN config means the config's owner can see unencrypted traffic. Use HTTPS everywhere and avoid sensitive logins over free configs.
 
 ## 11. Lessons from field testing
@@ -286,8 +287,8 @@ Each phase ends with something runnable and testable.
 | **3** | Privilege and services | pkexec launch, polkit policy, systemd unit, socket auth, startup toggles | Password dialog appears; helper-at-boot and autostart can be enabled/disabled |
 | **4** | Tray | StatusNotifierItem tray, 4 state icons, menu, notifications, single instance | Works on Cinnamon; right-click Connect connects |
 | **5** | Local web UI | Dashboard, Settings, Logs, first-run wizard; embedded, framework-free | Everything doable from the UI that the CLI can do; works offline |
-| **6** | Packaging | Bundled `tun2socks`/`adb`, `.deb` (empty Depends), standalone installer, desktop entry + icons, uninstall | Install and use on a fresh VM with **no network**; `purge` leaves nothing |
-| **7** | Hardening + release | Network-namespace tests, fuzzed IPC, CI, checksums/signing, docs | Clean CI, tagged release |
+| **6** | Packaging | Pinned bundle fetch, `.deb` (empty Depends), portable archive, desktop entry + icons, package removal/purge | Clean Debian VM install/use/removal and offline first run verified |
+| **7** | Hardening + release | Network-namespace route test, IPC fuzz targets, CI, generated checksums, docs | Clean tagged release, signed artifacts, release distribution |
 | **8** | Later (optional) | Auto-reconnect polish, per-app split tunnel, other distros/arches, translations | — |
 
 Recommended order for review: **1 → 2** first (test on your machine in the terminal), then 3, 4, 5, 6, 7.
@@ -307,7 +308,7 @@ vpnctl/
 ├── web/                     embedded UI: index.html  app.js  style.css  wizard
 ├── bundle/                  tun2socks + adb (pinned versions, checksums)
 ├── packaging/               vpnctl.desktop  vpnctld.service  polkit policy  config.example.toml  deb/
-├── scripts/                 build.sh  make-deb.sh  fetch-bundle.sh
+├── scripts/                 build.sh  fetch-bundle.sh  make-deb.sh  make-portable.sh  test-netns.sh  update-checksums.sh
 └── docs/
 ```
 
@@ -317,9 +318,9 @@ vpnctl/
 2. **"No graphical framework" and a browser.** The window is a web page, so it needs a web browser installed (every desktop has one). Alternative for headless use: the CLI and an optional terminal UI.
 3. **Tray on GNOME.** Needs the AppIndicator extension; the window still works.
 4. **`.deb` cannot show a window by itself.** Hence the first-run wizard (§9.3). If you want a prompt *during* `dpkg`, only a text `debconf` question is possible.
-5. **DNS backends.** systemd-resolved is the primary path; a fallback for systems without it is planned in Phase 1.
+5. **DNS backends.** systemd-resolved is preferred; a guarded resolv.conf fallback is supported when the file is a regular file. DNS-over-TLS requires systemd-resolved.
 6. **USB debugging prompts.** First connection needs a tap on the phone (*Allow USB debugging*); the wizard guides it.
-7. **Free VPN configs are unreliable and not private.** vpnctl cannot fix that; it reports health honestly.
+7. **Third-party redistribution terms.** The Google platform-tools notice is included in generated artifacts, but maintainers must verify redistribution terms before publishing a bundled adb release.
 
 ## 15. Licensing
 

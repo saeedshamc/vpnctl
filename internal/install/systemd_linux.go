@@ -9,33 +9,19 @@ import (
 	"strings"
 )
 
-// EnsureSystemFiles installs the systemd unit and polkit policy if missing.
+// EnsureSystemFiles installs or updates the systemd unit and polkit policy.
 // Safe to call repeatedly. Requires privilege via pkexec when not root.
 func EnsureSystemFiles(ctx context.Context) error {
-	if _, err := os.Stat(UnitPath); err != nil {
-		tmp := "/tmp/vpnctld.service"
-		if err := os.WriteFile(tmp, unitFile, 0o644); err != nil {
-			return err
-		}
-		if _, err := runPrivileged(ctx, "/usr/bin/install", "-D", "-m", "644", tmp, UnitPath); err != nil {
-			// try without absolute install
-			if _, err2 := runPrivileged(ctx, "install", "-D", "-m", "644", tmp, UnitPath); err2 != nil {
-				return fmt.Errorf("install unit: %v / %v", err, err2)
-			}
-		}
+	unitChanged, err := installEmbeddedFile(ctx, unitFile, UnitPath)
+	if err != nil {
+		return fmt.Errorf("install unit: %w", err)
+	}
+	if _, err := installEmbeddedFile(ctx, polkitPolicy, PolkitPath); err != nil {
+		return fmt.Errorf("install polkit policy: %w", err)
+	}
+	if unitChanged {
 		if _, err := runPrivileged(ctx, "systemctl", "daemon-reload"); err != nil {
 			return err
-		}
-	}
-	if _, err := os.Stat(PolkitPath); err != nil {
-		tmp := "/tmp/org.vpnctl.daemon.policy"
-		if err := os.WriteFile(tmp, polkitPolicy, 0o644); err != nil {
-			return err
-		}
-		if _, err := runPrivileged(ctx, "/usr/bin/install", "-D", "-m", "644", tmp, PolkitPath); err != nil {
-			if _, err2 := runPrivileged(ctx, "install", "-D", "-m", "644", tmp, PolkitPath); err2 != nil {
-				return fmt.Errorf("install polkit policy: %v / %v", err, err2)
-			}
 		}
 	}
 	return nil
@@ -73,15 +59,64 @@ func ServiceEnabled(ctx context.Context) (bool, error) {
 	}
 	out, err := run(ctx, systemctl, "is-enabled", UnitName)
 	if err != nil {
-		// systemctl returns non-zero for disabled
 		s := strings.TrimSpace(out)
-		if s == "disabled" || s == "masked" || s == "static" || s == "" {
+		switch s {
+		case "disabled", "masked", "static", "indirect", "generated", "transient", "not-found":
 			return false, nil
 		}
-		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "No such file") {
-			return false, nil
-		}
-		return false, nil
+		return false, err
 	}
 	return strings.TrimSpace(out) == "enabled", nil
+}
+
+func Uninstall(ctx context.Context, purge bool) error {
+	dp, err := look("dpkg-query")
+	if err != nil {
+		return fmt.Errorf("dpkg-query not found; this is not a Debian package installation")
+	}
+	status, err := run(ctx, dp, "-W", "-f=${db:Status-Status}", "vpnctl")
+	if err != nil || status != "installed" {
+		return fmt.Errorf("vpnctl is not installed as a Debian package; remove a portable installation manually")
+	}
+	dpkg, err := look("dpkg")
+	if err != nil {
+		return fmt.Errorf("dpkg not found: %w", err)
+	}
+	action := "-r"
+	if purge {
+		action = "-P"
+	}
+	_, err = runPrivileged(ctx, dpkg, action, "vpnctl")
+	return err
+}
+
+func installEmbeddedFile(ctx context.Context, data []byte, destination string) (bool, error) {
+	if current, err := os.ReadFile(destination); err == nil && string(current) == string(data) {
+		return false, nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	tmp, err := os.CreateTemp("", "vpnctl-install-*")
+	if err != nil {
+		return false, err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return false, err
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return false, err
+	}
+	if err := tmp.Close(); err != nil {
+		return false, err
+	}
+	install, err := look("install")
+	if err != nil {
+		return false, fmt.Errorf("install command not found: %w", err)
+	}
+	_, err = runPrivileged(ctx, install, "-D", "-m", "644", tmpPath, destination)
+	return err == nil, err
 }

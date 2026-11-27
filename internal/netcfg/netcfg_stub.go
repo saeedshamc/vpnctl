@@ -9,8 +9,9 @@ import (
 	"github.com/saeedshamc/vpnctl/internal/state"
 )
 
-func snapshot(ctx context.Context) (*state.Snapshot, error) {
+func snapshot(ctx context.Context, cfg config.Config) (*state.Snapshot, error) {
 	_ = ctx
+	_ = cfg
 	return nil, ErrNotSupported
 }
 

@@ -13,8 +13,8 @@ import (
 var ErrNotSupported = fmt.Errorf("netcfg: only supported on linux")
 
 // Snapshot captures the current network configuration for later restore.
-func Snapshot(ctx context.Context) (*state.Snapshot, error) {
-	return snapshot(ctx)
+func Snapshot(ctx context.Context, cfg config.Config) (*state.Snapshot, error) {
+	return snapshot(ctx, cfg)
 }
 
 // ApplyTunnelRoutes installs the vpnctl default route via tunName and DNS/IPv6 policy.

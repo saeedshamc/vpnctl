@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/saeedshamc/vpnctl/internal/browser"
+	"github.com/saeedshamc/vpnctl/internal/config"
 	"github.com/saeedshamc/vpnctl/internal/daemonize"
 	"github.com/saeedshamc/vpnctl/internal/ipc"
 	"github.com/saeedshamc/vpnctl/internal/paths"
@@ -59,6 +60,7 @@ func run() int {
 		log.Error("webui", "err", err)
 		return 1
 	}
+	ui.ForceWizard = *wizard
 	go func() {
 		if err := ui.ListenAndServe(ctx); err != nil {
 			log.Error("webui serve", "err", err)
@@ -73,19 +75,24 @@ func run() int {
 	openUI := func(hash string) {
 		_ = browser.OpenApp(ui.URL(hash))
 	}
+	go monitorAutoConnect(ctx, log)
 
 	var tr *tray.Item
 	tr, err = tray.Start(tray.Callbacks{
 		OnConnect: func() {
-			_ = call(ctx, ipc.MethodUp, nil)
+			if err := call(ctx, ipc.MethodUp, nil); err != nil {
+				log.Error("connect", "err", err)
+			}
 			refreshTray(tr)
 		},
 		OnDisconnect: func() {
-			_ = call(ctx, ipc.MethodDown, nil)
+			if err := call(ctx, ipc.MethodDown, nil); err != nil {
+				log.Error("disconnect", "err", err)
+			}
 			refreshTray(tr)
 		},
 		OnOpen:     func() { openUI("") },
-		OnSettings: func() { openUI("") },
+		OnSettings: func() { openUI("settings") },
 		OnQuit:     func() { stop() },
 	})
 	if err != nil {
@@ -103,30 +110,105 @@ func run() int {
 	return 0
 }
 
+func monitorAutoConnect(ctx context.Context, log *slog.Logger) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	var nextAttempt time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		cfg, err := config.Load()
+		if err != nil {
+			log.Error("auto-connect config", "err", err)
+			continue
+		}
+		if !cfg.AutoConnect || time.Now().Before(nextAttempt) {
+			continue
+		}
+		callCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		resp, err := callResponse(callCtx, ipc.MethodStatus, nil)
+		if err == nil {
+			var status ipc.StatusResult
+			if raw, marshalErr := json.Marshal(resp.Result); marshalErr == nil {
+				err = json.Unmarshal(raw, &status)
+			} else {
+				err = marshalErr
+			}
+			if err == nil && (status.State == "connected" || status.State == "connecting") {
+				cancel()
+				nextAttempt = time.Time{}
+				continue
+			}
+			if err == nil && status.PhoneState != "device" {
+				cancel()
+				continue
+			}
+		}
+		if err == nil {
+			_, err = callResponse(callCtx, ipc.MethodTest, nil)
+		}
+		if err == nil {
+			_, err = callResponse(callCtx, ipc.MethodUp, nil)
+		}
+		cancel()
+		if err != nil {
+			log.Warn("auto-connect failed", "err", err)
+			nextAttempt = time.Now().Add(30 * time.Second)
+			continue
+		}
+		log.Info("auto-connect succeeded")
+		nextAttempt = time.Time{}
+	}
+}
+
 func call(ctx context.Context, method string, params map[string]any) error {
+	_, err := callResponse(ctx, method, params)
+	return err
+}
+
+func callResponse(ctx context.Context, method string, params map[string]any) (ipc.Response, error) {
 	if err := daemonize.EnsureRunning(ctx, paths.SocketPath()); err != nil {
-		return err
+		return ipc.Response{}, err
 	}
 	c := &ipc.Client{Path: paths.SocketPath(), Timeout: 90 * time.Second}
 	resp, err := c.Call(method, params)
 	if err != nil {
-		return err
+		return ipc.Response{}, err
 	}
 	if !resp.OK && resp.Error != nil {
-		return resp.Error
+		return resp, resp.Error
 	}
-	return nil
+	if !resp.OK {
+		return resp, fmt.Errorf("helper rejected %s request", method)
+	}
+	return resp, nil
 }
 
 func pollTray(ctx context.Context, tr *tray.Item) {
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
+	last := tr.CurrentState()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 			refreshTray(tr)
+			current := tr.CurrentState()
+			if current != last {
+				switch current {
+				case tray.StateOn:
+					tr.Notify("vpnctl connected", "The phone VPN tunnel is active.")
+				case tray.StateOff:
+					tr.Notify("vpnctl disconnected", "The phone VPN tunnel is disconnected.")
+				case tray.StateError:
+					tr.Notify("vpnctl connection error", "The phone VPN tunnel needs attention.")
+				}
+				last = current
+			}
 		}
 	}
 }

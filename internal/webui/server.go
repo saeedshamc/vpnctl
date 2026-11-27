@@ -10,7 +10,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,8 +26,9 @@ import (
 
 // Server is the localhost UI.
 type Server struct {
-	Token   string
-	Addr    string // filled after Listen
+	Token          string
+	Addr           string // filled after Listen
+	ForceWizard    bool
 	OnOpenSettings func()
 
 	mu   sync.Mutex
@@ -57,6 +60,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS()))))
 	mux.HandleFunc("/api/status", s.withAuth(s.handleStatus))
+	mux.HandleFunc("/api/test", s.withAuth(s.handleTest))
 	mux.HandleFunc("/api/up", s.withAuth(s.handleUp))
 	mux.HandleFunc("/api/down", s.withAuth(s.handleDown))
 	mux.HandleFunc("/api/config", s.withAuth(s.handleConfig))
@@ -66,6 +70,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	s.http = &http.Server{
 		Handler:           s.secure(mux),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      2 * time.Minute,
+		IdleTimeout:       60 * time.Second,
 	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.http.Serve(ln) }()
@@ -93,16 +100,15 @@ func (s *Server) URL(hash string) string {
 
 func (s *Server) secure(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := r.Host
-		if i := strings.IndexByte(host, ':'); i >= 0 {
-			host = host[:i]
-		}
-		if host != "127.0.0.1" && host != "localhost" {
+		if !isLocalHost(r.Host) {
 			http.Error(w, "forbidden host", http.StatusForbidden)
 			return
 		}
 		if origin := r.Header.Get("Origin"); origin != "" {
-			if !strings.HasPrefix(origin, "http://127.0.0.1") && !strings.HasPrefix(origin, "http://localhost") {
+			parsed, err := url.Parse(origin)
+			if err != nil || parsed.Scheme != "http" || parsed.User != nil ||
+				!isLocalHost(parsed.Host) || !sameLocalOriginHost(parsed.Host, r.Host) ||
+				parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 				http.Error(w, "forbidden origin", http.StatusForbidden)
 				return
 			}
@@ -110,16 +116,47 @@ func (s *Server) secure(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isLocalHost(hostport string) bool {
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host = hostport
+		port = ""
+		if strings.Contains(hostport, ":") {
+			return false
+		}
+	}
+	if port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return false
+		}
+	}
+	return host == "127.0.0.1" || host == "localhost"
+}
+
+func sameLocalOriginHost(originHost, requestHost string) bool {
+	originName, originPort := splitHostPort(originHost)
+	requestName, requestPort := splitHostPort(requestHost)
+	return originName == requestName && originPort == requestPort
+}
+
+func splitHostPort(hostport string) (string, string) {
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return hostport, ""
+	}
+	return host, port
 }
 
 func (s *Server) withAuth(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok := r.Header.Get("X-Vpnctl-Token")
-		if tok == "" {
-			tok = r.URL.Query().Get("token")
-		}
 		if tok != s.Token {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
@@ -144,9 +181,17 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
 	resp, err := s.rpc(r.Context(), ipc.MethodStatus, nil)
 	if err != nil {
 		writeErr(w, 500, err.Error())
+		return
+	}
+	if !resp.OK {
+		writeErr(w, http.StatusBadGateway, responseError(resp))
 		return
 	}
 	writeJSON(w, resp.Result)
@@ -162,8 +207,25 @@ func (s *Server) handleUp(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	if !resp.OK && resp.Error != nil {
-		writeErr(w, 400, resp.Error.Message)
+	if !resp.OK {
+		writeErr(w, http.StatusBadGateway, responseError(resp))
+		return
+	}
+	writeJSON(w, resp.Result)
+}
+
+func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	resp, err := s.rpc(r.Context(), ipc.MethodTest, nil)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if !resp.OK {
+		writeErr(w, http.StatusBadGateway, responseError(resp))
 		return
 	}
 	writeJSON(w, resp.Result)
@@ -177,6 +239,10 @@ func (s *Server) handleDown(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.rpc(r.Context(), ipc.MethodDown, nil)
 	if err != nil {
 		writeErr(w, 500, err.Error())
+		return
+	}
+	if !resp.OK {
+		writeErr(w, http.StatusBadGateway, responseError(resp))
 		return
 	}
 	writeJSON(w, resp.Result)
@@ -193,7 +259,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, cfg)
 	case http.MethodPost:
 		var cfg config.Config
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&cfg); err != nil {
+		if err := decodeJSON(w, r, &cfg); err != nil {
 			writeErr(w, 400, "bad json")
 			return
 		}
@@ -202,19 +268,30 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, err.Error())
 			return
 		}
-		prev, _ := config.Load()
+		prev, err := config.Load()
+		if err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
 		if err := config.SaveUser(cfg); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}
 		if cfg.LaunchAtLogin != prev.LaunchAtLogin {
-			_ = install.SyncAutostartFromConfig(cfg.LaunchAtLogin)
+			if err := install.SyncAutostartFromConfig(cfg.LaunchAtLogin); err != nil {
+				writeErr(w, http.StatusInternalServerError, "settings saved but failed to update autostart: "+err.Error())
+				return
+			}
 		}
 		if cfg.HelperAtBoot != prev.HelperAtBoot {
 			if cfg.HelperAtBoot {
-				_ = install.ServiceEnable(r.Context())
+				err = install.ServiceEnable(r.Context())
 			} else {
-				_ = install.ServiceDisable(r.Context())
+				err = install.ServiceDisable(r.Context())
+			}
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, "settings saved but failed to update helper service: "+err.Error())
+				return
 			}
 		}
 		writeJSON(w, map[string]any{"ok": true})
@@ -224,8 +301,16 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
 	data, err := os.ReadFile(paths.LogPath())
 	if err != nil {
+		if !os.IsNotExist(err) {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		writeJSON(w, map[string]any{"text": "(no log yet)"})
 		return
 	}
@@ -244,7 +329,11 @@ func (s *Server) handleWizard(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		_, err := os.Stat(marker)
-		writeJSON(w, map[string]any{"needed": os.IsNotExist(err)})
+		if err != nil && !os.IsNotExist(err) {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, map[string]any{"needed": s.ForceWizard || os.IsNotExist(err)})
 	case http.MethodPost:
 		var body struct {
 			LaunchAtLogin bool `json:"launch_at_login"`
@@ -252,21 +341,42 @@ func (s *Server) handleWizard(w http.ResponseWriter, r *http.Request) {
 			AutoConnect   bool `json:"auto_connect"`
 			Done          bool `json:"done"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if err := decodeJSON(w, r, &body); err != nil {
 			writeErr(w, 400, "bad json")
 			return
 		}
-		cfg, _ := config.Load()
+		cfg, err := config.Load()
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		cfg.LaunchAtLogin = body.LaunchAtLogin
 		cfg.HelperAtBoot = body.HelperAtBoot
 		cfg.AutoConnect = body.AutoConnect
-		_ = config.SaveUser(cfg)
-		_ = install.SyncAutostartFromConfig(cfg.LaunchAtLogin)
+		if err := config.SaveUser(cfg); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := install.SyncAutostartFromConfig(cfg.LaunchAtLogin); err != nil {
+			writeErr(w, http.StatusInternalServerError, "settings saved but failed to update autostart: "+err.Error())
+			return
+		}
 		if cfg.HelperAtBoot {
-			_ = install.ServiceEnable(r.Context())
+			if err := install.ServiceEnable(r.Context()); err != nil {
+				writeErr(w, http.StatusInternalServerError, "settings saved but failed to enable helper service: "+err.Error())
+				return
+			}
+		} else {
+			if err := install.ServiceDisable(r.Context()); err != nil {
+				writeErr(w, http.StatusInternalServerError, "settings saved but failed to disable helper service: "+err.Error())
+				return
+			}
 		}
 		if body.Done {
-			_ = os.WriteFile(marker, []byte("ok\n"), 0o644)
+			if err := os.WriteFile(marker, []byte("ok\n"), 0o644); err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
 		}
 		writeJSON(w, map[string]any{"ok": true})
 	default:
@@ -280,6 +390,29 @@ func (s *Server) rpc(ctx context.Context, method string, params map[string]any) 
 	}
 	c := &ipc.Client{Path: paths.SocketPath(), Timeout: 90 * time.Second}
 	return c.Call(method, params)
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
+func responseError(resp ipc.Response) string {
+	if resp.Error != nil && resp.Error.Message != "" {
+		return resp.Error.Message
+	}
+	return "helper rejected request"
 }
 
 func wizardMarkerPath() (string, error) {
