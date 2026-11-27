@@ -2,12 +2,12 @@
 
 # vpnctl
 
-> Use the VPN running on your **Android phone** on your **Linux PC**, system-wide, over a USB cable.
-> One self-contained package. No runtime dependencies. Tray icon, CLI and a local web UI.
+> Route your **Linux PC's** traffic through the VPN running on your **Android phone**, over USB.
+> Self-contained release bundles with a tray icon, CLI and local web UI. The host still needs Linux networking, TUN and desktop components such as `iproute2`, systemd/polkit and a browser.
 
 **Languages:** English · [فارسی](README.fa.md)
 
-**Status:** Phases 0–5 are implemented. Phase 6 has reproducible bundle/package builders and uninstall hooks; validation on a clean Debian VM and a phone remains outstanding. Phase 7 now runs network-namespace route tests, IPC fuzzing, Go tests and Linux builds in CI; a tagged release and release signing still require a maintainer's release credentials and final licensing review.
+**Implementation status:** Required phases **0–7 are implemented**; optional Phase 8 has not started. Go tests/vet, network-namespace route restoration, IPC fuzzing, Linux builds and synthetic package builds have passed. **Acceptance still pending:** installation/use/removal on a clean Debian system, testing with a real Android phone, final third-party licensing review, and a tagged, signed release.
 
 ---
 
